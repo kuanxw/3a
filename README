@@ -1,1 +1,13 @@
-# Proj-3A
+NAME: Kuan Xiang Wen
+EMAIL: kuanxw@g.ucla.edu
+ID: 004461554
+
+==================================================================
+
+Files:
+(code)
+lab3a.c - Main metadata summary program
+README - This file
+Makefile - Makefile with default, dist, clean (and check for own use)
+
+==================================================================
