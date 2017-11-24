@@ -245,7 +245,7 @@ void indirect_block(int owner_inode_num, uint32_t block_num, int level, uint32_t
 }*/
 
 //Analyze indirect block references in a directory. Returns logical block offset of inner values
-int scan_dir_indirects(struct ext2_inode* inode, int inode_num, uint32_t block_num, unsigned int lbyte_offset, int level) {
+void scan_dir_indirects(struct ext2_inode* inode, int inode_num, uint32_t block_num, unsigned int lbyte_offset, unsigned int lblock_offset, int level) {
   uint32_t num_entries = block_s/sizeof(uint32_t);
   uint32_t entries[num_entries];
   memset(entries, 0, sizeof(entries));
@@ -262,21 +262,16 @@ int scan_dir_indirects(struct ext2_inode* inode, int inode_num, uint32_t block_n
   struct ext2_dir_entry* entry;
 
   unsigned int i;
-  int lblock_offset=0;
   
   for(i = 0; i < num_entries; i++) {
     if(entries[i] != 0) {
-      if(level == 2 || level == 3) {
-        if(lblock_offset == 0) lblock_offset = scan_dir_indirects(inode, inode_num, entries[i], lbyte_offset, level - 1);
-        else scan_dir_indirects(inode, inode_num, entries[i], lbyte_offset, level - 1);
-      }
       int status8 = pread(image, block, block_s, BLOCK_OFFSET(entries[i]));
       int test8 = errno;
 
       if(status8 == -1) {
         print_error("Error! Failed to read image", test8);
       }
-      if(S_ISDIR(inode->i_mode)){
+      if(S_ISDIR(inode->i_mode)){// if file_tpe == 'd'
         entry = (struct ext2_dir_entry*) block;
 	
         while((lbyte_offset < inode->i_size) && entry->file_type) {
@@ -292,11 +287,14 @@ int scan_dir_indirects(struct ext2_inode* inode, int inode_num, uint32_t block_n
         }
 	  }
 	  
-	  fprintf(stderr,"Try:%d\n",BLOCK_OFFSET(entries[i]));
-      fprintf(stdout,"INDIRECT,%d,%d,%d,%d,%d\n",inode_num,level,lblock_offset,block_num,entries[i]+1);
+	  //fprintf(stderr,"Try:%d\n",i);
+      fprintf(stdout,"INDIRECT,%d,%d,%d,%d,%d\n",inode_num,level,lblock_offset + i,block_num,entries[i]+1);
+	  
+      if(level == 2 || level == 3) {
+        scan_dir_indirects(inode, inode_num, entries[i], lbyte_offset, lblock_offset, level - 1);
+      }
     }
   }
-  return lblock_offset;
 }
 
 //directory and file analysis
@@ -335,13 +333,13 @@ void directory(struct ext2_inode* inode, int inode_num) {
   }
 
   if(inode->i_block[EXT2_IND_BLOCK] != 0) {
-    scan_dir_indirects(inode, inode_num, inode->i_block[EXT2_IND_BLOCK], lbyte_offset, 1);
+    scan_dir_indirects(inode, inode_num, inode->i_block[EXT2_IND_BLOCK], lbyte_offset, 12, 1);
   }
   if(inode->i_block[EXT2_DIND_BLOCK] != 0) {
-    scan_dir_indirects(inode, inode_num, inode->i_block[EXT2_DIND_BLOCK], lbyte_offset, 2);
+    scan_dir_indirects(inode, inode_num, inode->i_block[EXT2_DIND_BLOCK], lbyte_offset, 256 + 12, 2);
   }
   if(inode->i_block[EXT2_TIND_BLOCK] != 0) {
-    scan_dir_indirects(inode, inode_num, inode->i_block[EXT2_TIND_BLOCK], lbyte_offset, 3);
+    scan_dir_indirects(inode, inode_num, inode->i_block[EXT2_TIND_BLOCK], lbyte_offset, 65536 + 256 + 12, 3);
   }
 }
 
