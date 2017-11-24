@@ -3,7 +3,7 @@
 # ID: 004461554, 604840359
 
 default:
-	gcc lab3a.c -o lab3a -Wall -Wextra
+	gcc lab3a.c -o lab3a -Wall -Wextra -std=gnu11
 clean:
 	rm -f lab3a-004461554-604840359.tar.gz lab3a out.csv
 dist:
