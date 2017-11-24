@@ -259,7 +259,7 @@ int scan_dir_indirects(struct ext2_inode* inode, int inode_num, uint32_t block_n
   }
 
   unsigned char block[block_s];
-  //struct ext2_dir_entry* entry;
+  struct ext2_dir_entry* entry;
 
   unsigned int i;
   int lblock_offset=0;
@@ -276,20 +276,22 @@ int scan_dir_indirects(struct ext2_inode* inode, int inode_num, uint32_t block_n
       if(status8 == -1) {
         print_error("Error! Failed to read image", test8);
       }
-
-      /*entry = (struct ext2_dir_entry*) block;
+      if(S_ISDIR(inode->i_mode)){
+        entry = (struct ext2_dir_entry*) block;
 	
-      while((lbyte_offset < inode->i_size) && entry->file_type) {
-        char file_name[EXT2_NAME_LEN + 1];
-        memcpy(file_name, entry->name, entry->name_len);
-        file_name[entry->name_len] = 0;
-
-        if(entry->inode != 0) {
-          printf("DIRENT,%d,%d,%d,%d,%d,'%s'\n", inode_num, lbyte_offset, entry->inode, entry->rec_len, entry->name_len, file_name);
+        while((lbyte_offset < inode->i_size) && entry->file_type) {
+          char file_name[EXT2_NAME_LEN + 1];
+          memcpy(file_name, entry->name, entry->name_len);
+          file_name[entry->name_len] = 0;
+  
+          if(entry->inode != 0) {
+            printf("DIRENT,%d,%d,%d,%d,%d,'%s'\n", inode_num, lbyte_offset, entry->inode, entry->rec_len, entry->name_len, file_name);
+          }
+          lbyte_offset += entry->rec_len;
+          entry = (void*) entry + entry->rec_len;
         }
-        lbyte_offset += entry->rec_len;
-        entry = (void*) entry + entry->rec_len;
-      }*/
+	  }
+	  
 	  fprintf(stderr,"Try:%d\n",BLOCK_OFFSET(entries[i]));
       fprintf(stdout,"INDIRECT,%d,%d,%d,%d,%d\n",inode_num,level,lblock_offset,block_num,entries[i]+1);
     }
