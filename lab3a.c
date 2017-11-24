@@ -3,17 +3,6 @@
  * ID: 004461554, 604840359
  */
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <time.h>
-#include "ext2_fs.h"
-
 //Include the following libraries
 #include <stdio.h>
 #include <string.h>
@@ -39,7 +28,8 @@ const int BASE_OFFSET = 1024;
 
 //Global variables
 static int image = -1; //File system image file descriptor
-static unsigned int block_s = 0; //block size
+static int outfd = -1; //Output file descriptor
+static unsigned int block_s = 0; //block lbyte_offset
 static unsigned int num_groups = 0; //number of groups
 int* inode_bitmap;
 
@@ -64,6 +54,7 @@ void free_memory() {
     free(inode_bitmap);
   }
   close(image);
+  close(outfd);
 }
 
 
@@ -148,53 +139,6 @@ void group() {
   }
 }
 
-//Analyze indirect block references in a directory
-void scan_dir_indirects(struct ext2_inode* inode, int inode_num, uint32_t block_num, unsigned int size, int level) {
-  uint32_t num_entries = block_s/sizeof(uint32_t);
-  uint32_t entries[num_entries];
-  memset(entries, 0, sizeof(entries));
-  
-  int status7 = pread(image, entries, block_s, BLOCK_OFFSET(block_num));
-  int test7 = errno;
-
-  if(status7 == -1) {
-    print_error("Error! Failed to read image", test7);
-    exit(EXIT_ERROR);
-  }
-
-  unsigned char block[block_s];
-  struct ext2_dir_entry* entry;
-
-  unsigned int i;
-  for(i = 0; i < num_entries; i++) {
-    if(entries[i] != 0) {
-      if(level == 2 || level == 3) {
-	scan_dir_indirects(inode, inode_num, entries[i], size, level - 1);
-      }
-      int status8 = pread(image, block, block_s, BLOCK_OFFSET(entries[i]));
-      int test8 = errno;
-
-      if(status8 == -1) {
-	print_error("Error! Failed to read image", test8);
-      }
-
-      entry = (struct ext2_dir_entry*) block;
-
-      while((size < inode->i_size) && entry->file_type) {
-	char file_name[EXT2_NAME_LEN + 1];
-	memcpy(file_name, entry->name, entry->name_len);
-	file_name[entry->name_len] = 0;
-
-	if(entry->inode != 0) {
-	  printf("DIRENT,%d,%d,%d,%d,%d,'%s'\n", inode_num, size, entry->inode, entry->rec_len, entry->name_len, file_name);
-	}
-	size += entry->rec_len;
-	entry = (void*) entry + entry->rec_len;
-      }
-    }
-  }
-}
-
 //free block analysis
 void free_block() {
   unsigned i;
@@ -205,22 +149,22 @@ void free_block() {
     for(k = 0; k < block_s; k++) {
       //Read one byte at a time from the block's bitmap
       uint8_t byte;
-      int status3 = pread(image, &byte, 1, (block_s * group_desc[k].bg_block_bitmap) + k);
+      int status3 = pread(image, &byte, 1, (block_s * group_desc[i].bg_block_bitmap) + k);
       int test3 = errno;
       //Check if the pread failed
       if(status3 == -1) {
-	print_error("Error! Failed to read image file", test3);
-	exit(EXIT_ERROR);
+        print_error("Error! Failed to read image file", test3);
+        exit(EXIT_ERROR);
       }
 
       int mask = 1;
       unsigned long j;
       //Examine the byte bit by bit, with zero indicating a free block
       for(j = 0; j < 8; j++) {
-	if((byte & mask) == 0) {
-	  fprintf(stdout, "BFREE,%lu\n", i * sb.s_blocks_per_group + k*8 + j + 1);
-	}
-	mask <<= 1;
+        if((byte & mask) == 0) {
+          fprintf(stdout, "BFREE,%lu\n", i * sb.s_blocks_per_group + k*8 + j + 1);
+        }
+        mask <<= 1;
       }
     }
   }
@@ -248,8 +192,8 @@ void free_inode() {
       
       //Check if pread failed
       if(status4 == -1) {
-	print_error("Error! Failed to read image", test4);
-	exit(EXIT_ERROR);
+        print_error("Error! Failed to read image", test4);
+        exit(EXIT_ERROR);
       }
 
       inode_bitmap[i + j] = byte;
@@ -258,62 +202,15 @@ void free_inode() {
 
       //Examine the byte bit by bit, with zero indicating a free block
       for(k = 0; k < 8; k++) {
-	if((byte & mask) == 0) {
-	  fprintf(stdout, "IFREE,%lu\n", i * sb.s_inodes_per_group + j*8 + k + 1);
-	}
-	mask <<= 1;
+        if((byte & mask) == 0) {
+          fprintf(stdout, "IFREE,%lu\n", i * sb.s_inodes_per_group + j*8 + k + 1);
+        }
+        mask <<= 1;
       }
     }
   }
 }
-
-//Scan indirect block references in the directory
-
-
-//directory analysis
-void directory(struct ext2_inode* inode, int inode_num) {
-  unsigned char b[block_s];
-  struct ext2_dir_entry* entry;
-
-  //Analyze direct blocks
-  unsigned int size = 0;
-  unsigned int i;
-  for(i = 0; i < EXT2_NDIR_BLOCKS; i++) {
-    int status5 = pread(image, b, block_s, BLOCK_OFFSET(inode->i_block[i]));
-    int test5 = errno;
-
-    if(status5 == -1) {
-      print_error("Error! Failed to read image", test5);
-      exit(EXIT_ERROR);
-    }
-
-    entry = (struct ext2_dir_entry*) b;
-
-    while((size < inode->i_size) && entry->file_type) {
-      char file_name[EXT2_NAME_LEN + 1];
-      memcpy(file_name, entry->name, entry->name_len);
-
-      file_name[entry->name_len] = 0;
-
-      if(entry->inode != 0) {
-	printf("DIRENT,%d,%d,%d,%d,%d,'%s'\n", inode_num, size, entry->inode, entry->rec_len, entry->name_len, file_name);
-      }
-      size += entry->rec_len;
-      entry = (void*) entry + entry->rec_len;
-    }
-  }
-
-  if(inode->i_block[EXT2_IND_BLOCK] != 0) {
-    scan_dir_indirects(inode, inode_num, inode->i_block[EXT2_IND_BLOCK], size, 1);
-  }
-  if(inode->i_block[EXT2_DIND_BLOCK] != 0) {
-    scan_dir_indirects(inode, inode_num, inode->i_block[EXT2_DIND_BLOCK], size, 2);
-  }
-  if(inode->i_block[EXT2_TIND_BLOCK] != 0) {
-    scan_dir_indirects(inode, inode_num, inode->i_block[EXT2_TIND_BLOCK], size, 3);
-  }
-}
-
+/*
 //indirect block analysis
 void indirect_block(int owner_inode_num, uint32_t block_num, int level, uint32_t current_offset) {
   uint32_t num_entries = block_s / sizeof(uint32_t);
@@ -337,13 +234,112 @@ void indirect_block(int owner_inode_num, uint32_t block_num, int level, uint32_t
       printf("INDIRECT,%u,%u,%u,%u,%u\n", owner_inode_num, level, current_offset, block_num, entries[i]);
 
       if(level == 1) {
-	current_offset++;
+        current_offset++;
       } 
       else if(level == 2 || level == 3) {
-	current_offset += level == 2 ? 256 : 65536;
-	indirect_block(owner_inode_num, entries[i], level - 1, current_offset);
+        current_offset += level == 2 ? 256 : 65536;
+        indirect_block(owner_inode_num, entries[i], level - 1, current_offset);
       }
     }
+  }
+}*/
+
+//Analyze indirect block references in a directory. Returns logical block offset of inner values
+int scan_dir_indirects(struct ext2_inode* inode, int inode_num, uint32_t block_num, unsigned int lbyte_offset, int level) {
+  uint32_t num_entries = block_s/sizeof(uint32_t);
+  uint32_t entries[num_entries];
+  memset(entries, 0, sizeof(entries));
+  
+  int status7 = pread(image, entries, block_s, BLOCK_OFFSET(block_num));
+  int test7 = errno;
+
+  if(status7 == -1) {
+    print_error("Error! Failed to read image", test7);
+    exit(EXIT_ERROR);
+  }
+
+  unsigned char block[block_s];
+  //struct ext2_dir_entry* entry;
+
+  unsigned int i;
+  int lblock_offset=0;
+  
+  for(i = 0; i < num_entries; i++) {
+    if(entries[i] != 0) {
+      if(level == 2 || level == 3) {
+        if(lblock_offset == 0) lblock_offset = scan_dir_indirects(inode, inode_num, entries[i], lbyte_offset, level - 1);
+        else scan_dir_indirects(inode, inode_num, entries[i], lbyte_offset, level - 1);
+      }
+      int status8 = pread(image, block, block_s, BLOCK_OFFSET(entries[i]));
+      int test8 = errno;
+
+      if(status8 == -1) {
+        print_error("Error! Failed to read image", test8);
+      }
+
+      /*entry = (struct ext2_dir_entry*) block;
+	
+      while((lbyte_offset < inode->i_size) && entry->file_type) {
+        char file_name[EXT2_NAME_LEN + 1];
+        memcpy(file_name, entry->name, entry->name_len);
+        file_name[entry->name_len] = 0;
+
+        if(entry->inode != 0) {
+          printf("DIRENT,%d,%d,%d,%d,%d,'%s'\n", inode_num, lbyte_offset, entry->inode, entry->rec_len, entry->name_len, file_name);
+        }
+        lbyte_offset += entry->rec_len;
+        entry = (void*) entry + entry->rec_len;
+      }*/
+	  fprintf(stderr,"Try:%d\n",BLOCK_OFFSET(entries[i]));
+      fprintf(stdout,"INDIRECT,%d,%d,%d,%d,%d\n",inode_num,level,lblock_offset,block_num,entries[i]+1);
+    }
+  }
+  return lblock_offset;
+}
+
+//directory and file analysis
+void directory(struct ext2_inode* inode, int inode_num) {
+  unsigned int lbyte_offset = 0;//Used only in Directory, but declared outside for convenience for scan_dir_indirects()
+  if(S_ISDIR(inode->i_mode)){ // if(file_type == 'd')
+    unsigned char b[block_s];
+    struct ext2_dir_entry* entry;
+
+    //Analyze direct blocks
+    unsigned int i;
+    for(i = 0; i < EXT2_NDIR_BLOCKS; i++) {
+      int status5 = pread(image, b, block_s, BLOCK_OFFSET(inode->i_block[i]));
+      int test5 = errno;
+
+      if(status5 == -1) {
+        print_error("Error! Failed to read image", test5);
+        exit(EXIT_ERROR);
+      }
+
+      entry = (struct ext2_dir_entry*) b;
+
+      while((lbyte_offset < inode->i_size) && entry->file_type) {
+        char file_name[EXT2_NAME_LEN + 1];
+        memcpy(file_name, entry->name, entry->name_len);
+
+        file_name[entry->name_len] = 0;
+
+        if(entry->inode != 0) {
+          printf("DIRENT,%d,%d,%d,%d,%d,'%s'\n", inode_num, lbyte_offset, entry->inode, entry->rec_len, entry->name_len, file_name);
+        }
+        lbyte_offset += entry->rec_len;
+        entry = (void*) entry + entry->rec_len;
+      }
+    }
+  }
+
+  if(inode->i_block[EXT2_IND_BLOCK] != 0) {
+    scan_dir_indirects(inode, inode_num, inode->i_block[EXT2_IND_BLOCK], lbyte_offset, 1);
+  }
+  if(inode->i_block[EXT2_DIND_BLOCK] != 0) {
+    scan_dir_indirects(inode, inode_num, inode->i_block[EXT2_DIND_BLOCK], lbyte_offset, 2);
+  }
+  if(inode->i_block[EXT2_TIND_BLOCK] != 0) {
+    scan_dir_indirects(inode, inode_num, inode->i_block[EXT2_TIND_BLOCK], lbyte_offset, 3);
   }
 }
 
@@ -362,33 +358,33 @@ void inode_summary() {
 
       unsigned int j;
       for(j = 0; j < block_s; j++) {
-	uint8_t byte = inode_bitmap[i + j];
-	int mask = 1;
+        uint8_t byte = inode_bitmap[i + j];
+        int mask = 1;
 
-	int k;
-	for(k = 0; k < 8; k++) {
-	  unsigned long current_inode_num = i * sb.s_inodes_per_group + j * 8 + k + 1;
-	  if(current_inode_num == inode_num) {
-	    inode_found = 1;
+        int k;
+        for(k = 0; k < 8; k++) {
+          unsigned long current_inode_num = i * sb.s_inodes_per_group + j * 8 + k + 1;
+          if(current_inode_num == inode_num) {
+            inode_found = 1;
 
-	    if((byte & mask) == 0) {
-	      valid_inode = 0;
-	    }
-	    break;
-	  }
-	  mask <<= 1;
-	  if(inode_found) {
-	    break;
-	  }
-	}
+            if((byte & mask) == 0) {
+              valid_inode = 0;
+            }
+            break;
+          }
+          mask <<= 1;
+          if(inode_found) {
+            break;
+          }
+        }
       }
 
       if(!inode_found) {
-	continue;
+        continue;
       }
 
       if(!valid_inode) {
-	continue;
+        continue;
       }
 
       off_t offset = BLOCK_OFFSET(group_desc[i].bg_inode_table) + (inode_num - 1) * sizeof(struct ext2_inode);
@@ -397,19 +393,19 @@ void inode_summary() {
       int test6 = errno;
 
       if(status6 == -1) {
-	print_error("Error! Failed to read image", test6);
-	exit(EXIT_ERROR);
+        print_error("Error! Failed to read image", test6);
+        exit(EXIT_ERROR);
       }
 
 
       //Acquire inode file format
       char file_type = '?';
       if(S_ISDIR(inode.i_mode)) {
-	file_type = 'd';
+        file_type = 'd';
       } else if(S_ISREG(inode.i_mode)) {
-	file_type = 'f';
+        file_type = 'f';
       } else if(S_ISLNK(inode.i_mode)) {
-	file_type = 's';
+        file_type = 's';
       }
 
 
@@ -430,19 +426,19 @@ void inode_summary() {
       unsigned int u;
       //Print addresses
       for(u = 0; u < EXT2_N_BLOCKS; u++) {
-	printf(",%u", inode.i_block[u]);
+        printf(",%u", inode.i_block[u]);
       }
       printf("\n");
-
-      if(file_type == 'd') {
-	assert(S_ISDIR(inode.i_mode));
-	directory(&inode, inode_num);
+	  
+      if(file_type == 'd' || file_type == 'f') {
+        //assert(S_ISDIR(inode.i_mode));
+        directory(&inode, inode_num);
       }
-
+		
       //If currently reading root directory, go to thr first non-reserved inode for the 
       //next iteration
       if(inode_num == 2) {
-	inode_num = sb.s_first_ino - 1;
+        inode_num = sb.s_first_ino - 1;
       }
     }
   }
@@ -465,14 +461,14 @@ int main(int argc, char** argv) {
 
   //Check if failed to open file
   if(image == -1) {
-    print_error("Error: Could not open file: %s\n", strerror(status));
+    print_error("Error: Could not open file", status);
     exit(EXIT_ERROR);
   }
   outfd = creat("out.csv",0666);
-  int status = errno;
+  status = errno;
   
   if(outfd == -1){
-    print_error(stderr,"Error: Failed to create output file:  %s\n", strerror(errVar));
+    print_error("Error: Failed to create output file", status);
     exit(EXIT_ERROR);
   }
   
