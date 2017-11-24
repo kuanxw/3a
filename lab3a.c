@@ -288,7 +288,7 @@ void scan_dir_indirects(struct ext2_inode* inode, int inode_num, uint32_t block_
 	  }
 	  
 	  //fprintf(stderr,"Try:%d\n",i);
-      fprintf(stdout,"INDIRECT,%d,%d,%d,%d,%d\n",inode_num,level,lblock_offset + i,block_num,entries[i]+1);
+      fprintf(stdout,"INDIRECT,%d,%d,%d,%d,%d\n",inode_num,level,lblock_offset + i,block_num,entries[i]);
 	  
       if(level == 2 || level == 3) {
         scan_dir_indirects(inode, inode_num, entries[i], lbyte_offset, lblock_offset, level - 1);
