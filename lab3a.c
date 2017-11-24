@@ -1,6 +1,10 @@
 /* NAME: Kuan Xiang Wen
  * EMAIL: kuanxw@g.ucla.edu
  * ID: 004461554
+ *
+ * NAME: Amir Saad
+ * EMAIL: 
+ * ID: 
  */
 
 #include <stdlib.h>
